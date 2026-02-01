@@ -1,9 +1,9 @@
 /target
-./todo.txt
-./main.asm
-./main
-./main.o
-./print_num.v
-./run.sh
-./test.v
-./copy.asm
+todo.txt
+main.asm
+main.o
+print_num.v
+run.sh
+test.v
+copy.asm
+main
