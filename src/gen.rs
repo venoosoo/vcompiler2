@@ -1,28 +1,34 @@
 use core::panic;
 use std::{collections::HashMap, fmt::Write};
 
-use crate::parser::{FunctionCall, PushNum, PushVar, RpnExpr};
+use crate::parser::{ FunctionCall, Operator, PushNum, PushVar, Ret, RpnExpr};
 use crate::tokenizer::Token;
 use crate::{parser::Expr, tokenizer::TokenType, parser::Arg};
-
-
-
+#[derive(Debug)]
+struct expr_stack {
+    reg: String,
+    var_typd: (TokenType, u32),
+}
+#[derive(Debug)]
+// ????????
 struct arr_data {
     size: u32,
 
 
 }
-
+#[derive(Debug)]
 struct var_data {
     stack_pos: i32,
     scope_depth: usize,
     var_type: TokenType,
     arr_data: Option<arr_data>,
+    pointer_depth: u32,
 }
 #[derive(Debug, Clone)]
 struct func_data {
     args: Vec<Arg>,
-    return_type: Token,
+    // return type and pointer depth
+    return_type: (Token, u32),
 }
 
 pub struct Gen {
@@ -73,7 +79,7 @@ impl Gen {
             TokenType::CharType => 1,
             TokenType::ShortType => 2,
             TokenType::LongType => 8,
-            _ => panic!("trying to get size of unexpected type"),
+            _ => panic!("trying to get size of unexpected type: {:?}",token),
         }
     }
 
@@ -223,16 +229,16 @@ impl Gen {
         return (lhs.to_string(),rhs.to_string());
     }
 
-    fn calc_expr_stack_size(stack: &Vec<String>) -> u32 {
+    fn calc_expr_stack_size(stack: &Vec<expr_stack>) -> u32 {
         let mut res = 0u32;
         for reg in stack {
-            res += Gen::convert_reg_to_size(&reg);
+            res += Gen::convert_reg_to_size(&reg.reg);
         }
         res
     }
 
     fn eval_expr(&mut self, rpn: Vec<RpnExpr>) {
-        let mut stack: Vec<String> = Vec::new();
+        let mut stack: Vec<expr_stack> = Vec::new();
         for expr in rpn {
             match expr {
                 RpnExpr::PushNum(p) => {
@@ -240,101 +246,95 @@ impl Gen {
                     
                     if stack.is_empty() {
                         self.emit(format!("    mov rax, {}",val));
-                        stack.push("rax".into());
+                        stack.push(expr_stack { reg: "rax".to_string(), var_typd: (TokenType::Num, 0) })
                     } else if stack.len() == 1 {
                         self.emit(format!("    mov rbx, {}", val));
-                        stack.push("rbx".into());
+                        stack.push(expr_stack { reg: "rbx".to_string(), var_typd: (TokenType::Num, 0) })
                     } else {
                         let slot = Gen::calc_expr_stack_size(&stack) + 8;
                         self.emit(format!(
                             "    mov QWORD [rbp-{}], {}",
                             slot, val
                         ));
-                        stack.push(format!("[rbp-{}]", slot));
+                        stack.push(expr_stack { reg: format!("[rbp-{}]", slot), var_typd: (TokenType::Num, 0) })
+                    }
+                }
+
+                RpnExpr::Deref(v) => {
+                    let name = v.var.value.unwrap();
+                    let var_data = self.m_vars.get(&name).expect(&format!("no var with name: {}",name));
+                    let pointer_depth = var_data.pointer_depth;
+                    let var_type = var_data.var_type;
+                    self.emit(format!("    mov rsi, [rbp - {}]",var_data.stack_pos));
+                    for i in 0..v.stack_depth {
+                        if i % 2 == 0 {
+                            self.emit(format!("    mov rax, [rsi]"));
+                        } else {
+                            self.emit(format!("    mov rsi, [rax]"));
+                        }
+                    }
+                    if v.stack_depth % 2 == 0 {
+                        self.emit(format!("    mov rax, rsi"));
+                    }
+                    stack.push(expr_stack { reg: "rax".to_string(), var_typd: (var_type, pointer_depth) })
+
+                }
+
+
+                RpnExpr::GetAddr(v) => {
+                    let var_name = v.var.value.unwrap();
+                    let var_data = self.m_vars.get(&var_name).expect(&format!("no var with name: {}",var_name));
+                    let pointer_depth = var_data.pointer_depth;
+                    let var_type = var_data.var_type;
+                    self.emit(format!("    lea rsi, [rbp-{}]",var_data.stack_pos));
+                    if stack.is_empty() {
+                        self.emit(format!("    mov rax, rsi"));
+                        stack.push(expr_stack { reg: "rax".to_string(), var_typd: (var_type, pointer_depth + 1) })
+                    } else if stack.len() == 1 {
+                        self.emit(format!("    mov rbx, rsi"));
+                        stack.push(expr_stack { reg: "rbx".to_string(), var_typd: (var_type, pointer_depth + 1) })
+                    } else {
+                        let slot = Gen::calc_expr_stack_size(&stack) + 8;
+                        self.emit(format!(
+                            "    mov QWORD [rbp-{}], rsi",
+                            slot
+                        ));
+                        stack.push(expr_stack { reg: format!("[rbp-{}]", slot), var_typd: (var_type, pointer_depth + 1) })
                     }
                 }
 
                 RpnExpr::GetArrayValue(v) => {
-                    let name = v.name.value.unwrap();
+                    let mut res: Vec<RpnExpr> = Vec::new();
+                    
+                    let push_var = PushVar {
+                        data: v.name,
+                    };
+                    res.push(RpnExpr::PushVar(push_var));
+                    if v.index.token != TokenType::Num {
+                        let im_dumd = PushVar {
+                            data: v.index
+                        };
+                        res.push(RpnExpr::PushVar(im_dumd));                                      
+                    }
+                    else {
+                        let push_index = PushNum {
+                            
+                            data: v.index,
+                        };
+                        res.push(RpnExpr::PushNum(push_index));
+                    }
 
-                    let (arr_stack_pos, arr_type) = {
-                        let v = self.m_vars
-                            .get(&name)
-                            .expect(&format!("no array with name: {}", name));
-                        (v.stack_pos, v.var_type)
+                    let plus_op = Operator {
+                        data: Token { token: TokenType::Add, value: Some("+".into()) }
                     };
 
-                    let elem_size = self.get_size(arr_type) as i32;
+                    res.push(RpnExpr::Operator(plus_op));
 
-                    // ================= CONSTANT INDEX =================
-                    if v.index.token == TokenType::Num {
-                        let index: i32 = v.index.value.unwrap().parse().unwrap();
-                        let pos = arr_stack_pos - elem_size * index;
+                    self.eval_expr(res);
 
-                        if stack.is_empty() {
-                            let reg = Gen::get_rax_register(arr_type);
-                            self.emit(format!("    mov {}, [rbp-{}]", reg, pos));
-                            stack.push(reg.to_string());
-                        }
-                        else if stack.len() == 1 {
-                            let reg = Gen::get_rbx_register(arr_type);
-                            self.emit(format!("    mov {}, [rbp-{}]", reg, pos));
-                            stack.push(reg.to_string());
-                        }
-                        else {
-                            let slot = Gen::calc_expr_stack_size(&stack) + 8;
-                            self.emit(format!("    mov eax, [rbp-{}]", pos));
-                            self.emit(format!("    mov [rbp-{}], eax", slot));
-                            stack.push(format!("[rbp-{}]", slot));
-                        }
-                    }
 
-                    // ================= VARIABLE INDEX =================
-                    else {
-                        let index_name = v.index.value.unwrap();
-
-                        let index_stack_pos = {
-                            let iv = self.m_vars
-                                .get(&index_name)
-                                .expect(&format!("no var with name: {}", index_name));
-                            iv.stack_pos
-                        };
-                        // rsi = index
-                        self.emit(format!(
-                            "    mov {}, {} [rbp-{}]",
-                            Gen::get_rsi_regsiter(arr_type),Gen::get_word(arr_type),index_stack_pos
-                        ));
-                        // rsi = index * elem_size
-                        self.emit(format!(
-                            "    imul rsi, {}",
-                            elem_size
-                        ));
-                        // rdi = &array[0]
-                        self.emit(format!(
-                            "    lea rdi, [rbp-{}]",
-                            arr_stack_pos
-                        ));
-                        // rdi = &array[index]
-                        self.emit("    add rdi, rsi".to_string());
-
-                        // load value safely into expression
-                        if stack.is_empty() {
-                            let reg = Gen::get_rax_register(arr_type);
-                            self.emit(format!("    mov {}, [rdi]", reg));
-                            stack.push(reg.to_string());
-                        }
-                        else if stack.len() == 1 {
-                            let reg = Gen::get_rbx_register(arr_type);
-                            self.emit(format!("    mov {}, [rdi]", reg));
-                            stack.push(reg.to_string());
-                        }
-                        else {
-                            let slot = Gen::calc_expr_stack_size(&stack) + 8;
-                            self.emit("    mov eax, [rdi]".to_string());
-                            self.emit(format!("    mov [rbp-{}], eax", slot));
-                            stack.push(format!("[rbp-{}]", slot));
-                        }
-                    }
+                    self.emit(format!("    mov rax, [rax]"));
+                    
                 
                 
                 }
@@ -364,27 +364,48 @@ impl Gen {
                 }
 
                 
-                RpnExpr::PushVar(p) => {
+                RpnExpr::PushVar( p) => {
                     let name = p.data.value.clone().unwrap();
-                    let var = self.m_vars.get(&name).expect(format!("unkown var: {}",&name).as_str());
+                    let var: &var_data = self.m_vars.get(&name).expect(format!("unkown var: {}",&name).as_str());
                     let pos = var.stack_pos;
-                    
+                    let var_type = var.var_type;
+                    let pointer_depth = var.pointer_depth;
+
                     
                     if stack.is_empty() {
-                        let arg = Gen::get_rax_register(var.var_type);
-                        self.emit(format!("    mov {}, [rbp-{}]",arg ,pos));
-                        stack.push(format!("{}",arg));
+                        let mut arg = Gen::get_rax_register(var.var_type);
+                        if var.pointer_depth != 0 {
+                            arg = "rax".to_string();
+                        }
+                        if var.arr_data.is_some() {
+                            self.emit(format!("    lea rax, [rbp-{}]",pos));
+                            stack.push(expr_stack { reg: format!("{}",arg), var_typd: (var_type,pointer_depth) });
+                        }
+                        else {
+                            self.emit(format!("    mov {}, [rbp-{}]",arg ,pos));
+                            stack.push(expr_stack { reg: format!("{}",arg), var_typd: (TokenType::Num,0) });
+                        }
                     } else if stack.len() == 1 {
-                        let arg = Gen::get_rbx_register(var.var_type);
-                        self.emit(format!("    mov {}, [rbp-{}]",arg,pos));
-                        stack.push(format!("{}",arg));
+                        let mut arg = Gen::get_rbx_register(var.var_type);
+                        if var.pointer_depth != 0 {
+                            arg = "rbx".to_string();
+                        }
+                        if var.arr_data.is_some() {
+                            self.emit(format!("    lea rbx, [rbp-{}]",pos));
+                        }
+                        else {
+                            self.emit(format!("    mov {}, [rbp-{}]",arg ,pos));
+                        }
+                        stack.push(expr_stack { reg: format!("{}",arg), var_typd: (TokenType::Num,0) });
                     } else {
                         let slot = Gen::calc_expr_stack_size(&stack) + 8;
-                        self.emit(format!(
-                            "    mov [rbp-{}], [rbp-{}]",
-                            slot, pos
-                        ));
-                        stack.push(format!("[rbp-{}]", slot));
+                        if var.arr_data.is_some() {
+                            self.emit(format!("    lea [rbp - {}], [rbp - {}]",slot,pos));
+                        }
+                        else {
+                            self.emit(format!("    mov [rbp - {}], [rbp-{}]",slot ,pos));
+                        }
+                        stack.push(expr_stack { reg: format!("[rbp-{}]", slot), var_typd: (TokenType::Num,0) });
                     }
                 }
                 
@@ -400,9 +421,22 @@ impl Gen {
                         | TokenType::Remainder => {
                             let rhs = stack.pop().expect("rhs missing");
                             let lhs = stack.pop().expect("lhs missing");
-                            
-                            let res = self.compare_reg(&lhs, &rhs);
+                            let res = self.compare_reg(&lhs.reg, &rhs.reg);
 
+                            if *t == TokenType::Add {
+                                if lhs.var_typd.1 > 0 {
+                                    self.emit(format!("    imul {}, {}",res.1, self.get_size(lhs.var_typd.0)));
+                                }
+                                else if rhs.var_typd.1 > 0 {
+                                    self.emit(format!("    imul {}, {}",res.0, self.get_size(rhs.var_typd.0)));
+                                }
+                            }
+
+                            if *t == TokenType::Sub {
+                                if lhs.var_typd.1 > 0 {
+                                    self.emit(format!("    imul {}, {}",res.1, self.get_size(lhs.var_typd.0)));
+                                }
+                            }
                             
                             match t {
                                 TokenType::Add => self.emit(format!("    add {}, {}", res.0, res.1)),
@@ -419,8 +453,7 @@ impl Gen {
                                 }
                                 _ => unreachable!(),
                             }
-                            
-                            stack.push(format!("{}",lhs));
+                            stack.push(expr_stack { reg: format!("{}",lhs.reg), var_typd: (TokenType::Num,0) });
                         }
                         
                         // ===== comparisons =====
@@ -433,7 +466,7 @@ impl Gen {
                             let rhs = stack.pop().unwrap();
                             let lhs = stack.pop().unwrap();
                             
-                            let res = self.compare_reg(&lhs, &rhs);
+                            let res = self.compare_reg(&lhs.reg, &rhs.reg);
                             
                             self.emit(format!("    cmp {}, {}",res.0, res.1));
                             
@@ -450,7 +483,7 @@ impl Gen {
                             self.emit(format!("    {} al", set));
                             self.emit("    movzx rax, al".into());
                             
-                            stack.push("rax".into());
+                            stack.push(expr_stack { reg: "rax".into(), var_typd: (TokenType::Num,0) });
                         }
                         
                         _ => panic!("unsupported operator {:?}", t),
@@ -458,14 +491,14 @@ impl Gen {
                 }
                 
                 RpnExpr::Function(func) => {
-                    let function_call = FunctionCall {
-                        name: func.name,
-                        args: func.args,
-                    };
-                    let expr = Expr::FunctionCall(function_call);
-                    self.parse_one_expr(expr);
+                    // let function_call = FunctionCall {
+                    //     name: func.name,
+                    //     args: func.args,
+                    // };
+                    // let expr = Expr::FunctionCall(function_call);
+                    // self.parse_one_expr(expr);
                     
-                    stack.push("rax".into());
+                    // stack.push("rax".into());
                 }
             }
         }
@@ -535,6 +568,48 @@ impl Gen {
     }
 
 
+    fn get_type_of_expr(&self,expr: Vec<RpnExpr>) -> (TokenType, u32) {
+        let mut res = TokenType::IntType; // default one
+        let mut pointer_depth = 0;
+        for i in expr { 
+            match i {
+
+                RpnExpr::PushVar(v) => {
+                    if v.data.token == TokenType::Var {
+                        let name = v.data.value.unwrap();
+                        let var = self.m_vars.get(&name).expect(&format!("no variable with name: {}",name));
+                        if self.get_size(res) < self.get_size(var.var_type) {
+                            res = v.data.token;
+                        }
+                        if var.pointer_depth > pointer_depth {
+                            pointer_depth = var.pointer_depth;
+                        }
+                    }
+                    else if self.get_size(res) < self.get_size(v.data.token) {
+                        res = v.data.token;
+                    }
+                }
+                RpnExpr::GetAddr(v) => {
+                    let name = v.var.value.unwrap();
+                    let var_data = self.m_vars.get(&name).expect(&format!("no var with name: {}",name));
+                    res = var_data.var_type;
+                    pointer_depth = var_data.pointer_depth + 1;
+                }
+
+                RpnExpr::Deref(v) => {
+                    let name = v.var.value.unwrap();
+                    let var_data = self.m_vars.get(&name).expect(&format!("no var with name: {}",name));
+                    res = var_data.var_type;
+                    pointer_depth = var_data.pointer_depth - v.stack_depth;
+                }
+
+                _ => continue,
+            }
+        }
+        (res, pointer_depth)
+    }
+
+
     fn get_word(token: TokenType) -> String {
         match token {
             TokenType::IntType => "DWORD".to_string(),
@@ -556,10 +631,21 @@ impl Gen {
     fn parse_one_expr(&mut self,expr: Expr) {
         match expr {
                 Expr::Var(v) => {
+                    let expr_type = self.get_type_of_expr(v.Expr.clone());
+                    if expr_type.1 != 0 {
+                        panic!("trying to create var with pointer value");
+                    }
                     self.eval_expr(v.Expr);
                     let pos: i32 = self.alloc(v.Type) as i32;
                     self.emit(format!("    mov {} [rbp - {}], {}",Gen::get_word(v.Type),pos, Gen::get_rax_register(v.Type)));
-                    self.add_var(v.Var, var_data { stack_pos: pos, scope_depth: self.depth_size, var_type: v.Type, arr_data: None });
+                    self.add_var(v.Var, var_data { 
+                        stack_pos: pos, 
+                        scope_depth: self.depth_size, 
+                        var_type: v.Type, 
+                        arr_data: None,
+                        pointer_depth: expr_type.1,
+                     
+                    });
                 }
                 Expr::OpenScope(v) => {
                     self.scope_stack.push(self.m_stack_pos as i32);
@@ -572,6 +658,49 @@ impl Gen {
                     });
                     self.depth_size -= 1;
                     
+                }
+
+                Expr::CreatePointer(v) => {
+                    let expr_type = self.get_type_of_expr(v.Expr.clone());
+                    self.eval_expr(v.Expr);
+                
+                
+                    if v.pointer_depth != expr_type.1 && expr_type.0 != TokenType::IntType {
+                        println!("name: {}",v.Var);
+                        println!("lhs: {}, rhs: {}",v.pointer_depth,expr_type.1);
+                        panic!("trying to create pointer var with unexcepted value");
+                    }
+
+                    if v.Type != expr_type.0 {
+                        panic!("trying to create pointer with wrong type value");
+                    }
+                    
+
+                    // pointers takes 8 bytes no matter the real type
+                    let pos: i32 = self.alloc(TokenType::LongType) as i32;
+                    self.emit(format!("    mov [rbp - {}], rax",pos));
+                    let var_data = var_data {
+                        stack_pos: pos,
+                        scope_depth: self.depth_size,
+                        var_type: v.Type,
+                        arr_data: None,
+                        pointer_depth: v.pointer_depth,
+
+                    };
+                    self.m_vars.insert(v.Var, var_data);
+                    
+                }
+
+                Expr::ChangePtrValue(v) => {
+                    let expr_type = self.get_type_of_expr(v.Expr.clone());
+                    self.eval_expr(v.Expr);
+                    let var_data = self.m_vars.get(&v.Var).expect(&format!("no var with name: {}",v.Var));
+                    let var_type = var_data.var_type;
+                    if var_type != expr_type.0 && expr_type.1 != v.pointer_depth {
+                        panic!("when changing var: {}, unexcpected value",v.Var)
+                    }
+                    self.emit(format!("    mov rsi, [rbp - {}]",var_data.stack_pos));
+                    self.emit(format!("    mov {} [rsi], {}",Gen::get_word(var_type), Gen::get_rax_register(var_type)));
                 }
 
                 Expr::InitArray(v) => {
@@ -596,6 +725,7 @@ impl Gen {
                         scope_depth: self.depth_size,
                         var_type: v.arr_type.token,
                         arr_data: Some(arr_data),
+                        pointer_depth: 1,
                     };
                     self.add_var(v.name.value.unwrap(), arr_var);
 
@@ -679,25 +809,18 @@ impl Gen {
                     self.emit(format!("    mov [rbp - {}], eax",pos));
                 }
                 Expr::Ret(v) => {
-                    if v.return_token.token == TokenType::Var{
-                        let var = self.m_vars.get(&v.return_token.value.unwrap()).unwrap();
-                        let func = self.functions.get(&self.current_func);
-                        if func.is_some() {
-                            let func = func.unwrap();
-                            if func.return_type.token == var.var_type {
-                                self.emit(format!("    mov rax, [rbp - {}]",var.stack_pos));
-                            }
-                            else {
-                                panic!("the return type is wrong");
-                            }
-                        }
+                    let type_expr = self.get_type_of_expr(v.expr.clone());
+                    self.eval_expr(v.expr);
+                    let func_data = self.functions.get(&v.func_name).expect(&format!("something wrong using return on unkown function: {}",v.func_name));
+                    if type_expr.0 == func_data.return_type.0.token && type_expr.1 == func_data.return_type.1  {
+                        self.emit("    mov rsp, rbp".to_string());
+                        self.emit("    pop rbp".to_string());
+                        self.emit("    ret".to_string());
                     }
                     else {
-                        self.emit(format!("    mov rax, {}",v.return_token.value.unwrap()));
+                        println!("type_expr: {:?}\nfunc_data: {:?}",type_expr,func_data);
+                        panic!("trying to return with wrong type in: {}",v.func_name);
                     }
-                    self.emit("    mov rsp, rbp".to_string());
-                    self.emit("    pop rbp".to_string());
-                    self.emit("    ret".to_string());
                 }
                 Expr::InitFunc(v) => {
                     let name = v.name.value.clone().unwrap();
@@ -705,7 +828,12 @@ impl Gen {
                     self.emit(format!("{}:",name));
                     let mut temp_stack_size = self.calc_stack_size(&v.data);
                     for arg in &v.args {
-                        temp_stack_size += self.get_size(arg.arg_type.token);
+                        if arg.pointer_depth > 0 {
+                            temp_stack_size += 8;
+                        } else {
+
+                            temp_stack_size += self.get_size(arg.arg_type.token);
+                        }
                     }
                     let total = (temp_stack_size + 15) & !15;
                     self.emit("    push rbp".to_string());
@@ -715,14 +843,28 @@ impl Gen {
                     self.depth_size += 1;
                     self.scope_stack.push(self.m_stack_pos as i32);
                     for (index, arg) in v.args.iter().enumerate() {
-                        let pos = self.alloc(arg.arg_type.token);
-                        self.emit(format!("    mov [rbp - {}], {}",pos, Gen::arg_pos(index,arg.arg_type.token)));
-                        let var_data = var_data { stack_pos: pos as i32, scope_depth: self.depth_size, var_type: arg.arg_type.token, arr_data:None };
-                        self.add_var(arg.name.value.clone().unwrap(), var_data);
+                        if arg.pointer_depth > 0 {
+                            let pos = self.alloc(TokenType::LongType);
+                            self.emit(format!("    mov [rbp - {}], {}",pos, Gen::arg_pos(index,TokenType::LongType)));
+                            let var_data = var_data { stack_pos: pos as i32, scope_depth: self.depth_size, var_type: arg.arg_type.token, arr_data:None, pointer_depth: arg.pointer_depth };
+                            self.add_var(arg.name.value.clone().unwrap(), var_data);
+
+                        } else {
+                            let pos = self.alloc(arg.arg_type.token);  
+                            self.emit(format!("    mov [rbp - {}], {}",pos, Gen::arg_pos(index,arg.arg_type.token)));
+                            let var_data = var_data { stack_pos: pos as i32, scope_depth: self.depth_size, var_type: arg.arg_type.token, arr_data:None, pointer_depth: 0 };
+                            self.add_var(arg.name.value.clone().unwrap(), var_data);
+                        }  
+                        
                     }
                     self.depth_size -= 1;
                     for i in v.data {
                         self.parse_one_expr(i);
+                    }
+                    if v.return_type.0.token == TokenType::Void {
+                        self.emit("    mov rsp, rbp".to_string());
+                        self.emit("    pop rbp".to_string());
+                        self.emit("    ret".to_string());
                     }
                     self.m_stack_pos = self.scope_stack.pop().expect("unexcpected }") as u32;
                     self.current_func = "".to_string();
@@ -781,20 +923,19 @@ impl Gen {
                     
                     if func_data.is_some() {
                         let func_data = func_data.unwrap();
-                        for (index, arg_data) in func_data.args.iter().enumerate() {
-                            if v.args[index].token == TokenType::Num {
-                                if Gen::is_num(arg_data.arg_type.token) {
-                                    self.emit(format!("    mov {}, {}",Gen::arg_pos(index, TokenType::LongType),v.args[index].value.clone().unwrap()));
-                                }
+                        for (index, v) in v.args.iter().enumerate() {
+                            let mut expr_type = self.get_type_of_expr(v.to_vec());
+                            if expr_type.1 > 0 {
+                                expr_type.0 = TokenType::LongType;
                             }
-                            if v.args[index].token == TokenType::Var {
-                                let x = self.m_vars.get(&v.args[index].value.clone().unwrap()).expect("no var with that name");
-                                if x.var_type == arg_data.arg_type.token {
-                                    self.emit(format!("    mov {}, [rbp - {}]",Gen::arg_pos(index,x.var_type),x.stack_pos));
-                                }
-                                else {
-                                    panic!("wrong arg type pasted {:?} excpected {:?}", v.args[index].token, arg_data.arg_type.token);
-                                }
+                            self.eval_expr(v.to_vec());
+                            self.emit(format!("    mov {}, {}",Gen::arg_pos(index, expr_type.0), Gen::get_rax_register(expr_type.0)));
+                        }
+                        for (index, arg_data) in func_data.args.iter().enumerate() {
+                            let expr = self.get_type_of_expr(v.args[index].clone());
+                            if expr.0 != arg_data.arg_type.token
+                            || expr.1 != arg_data.pointer_depth {
+                                panic!("wrong arg type pasted {:?} p_depth: {:?}\nexcpected {:?} p_depth: {:?}", expr.0,expr.1, arg_data.arg_type.token,arg_data.pointer_depth);
                             }
                         }
                         self.emit("    sub rsp,8".to_string());

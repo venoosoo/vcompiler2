@@ -6,7 +6,8 @@ use crate::tokenizer::TokenType;
 pub struct Parser {
     m_tokens: Vec<Token>,
     m_index: usize,
-    expressions: Vec<Expr>
+    expressions: Vec<Expr>,
+    func_name: String,
 }
 
 
@@ -31,6 +32,20 @@ pub enum RpnExpr {
     Function(Function),
     Negative(Negative),
     GetArrayValue(GetArrayValue),
+    Deref(Deref),
+    GetAddr(GetAddr),
+}
+
+
+#[derive(Debug, Clone)]
+pub struct GetAddr {
+    pub var: Token,
+}
+
+#[derive(Debug, Clone)]
+pub struct Deref {
+    pub var: Token,
+    pub stack_depth: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +94,23 @@ pub enum Expr {
     AsmCode(AsmCode),
     InitArray(InitArray),
     ChangeArrElement(ChangeArrElement),
+    CreatePointer(CreatePointer),
+    ChangePtrValue(ChangePtrValue),
+}
+
+#[derive(Debug, Clone)]
+pub struct ChangePtrValue {
+    pub Var: String,
+    pub Expr: Vec<RpnExpr>,
+    pub pointer_depth: u32
+}
+
+#[derive(Debug, Clone)]
+pub struct CreatePointer {
+    pub Type: TokenType,
+    pub Var: String,
+    pub Expr: Vec<RpnExpr>,
+    pub pointer_depth: u32
 }
 
 #[derive(Debug, Clone)]
@@ -106,25 +138,28 @@ pub struct AsmCode {
 #[derive(Debug, Clone)]
 pub struct FunctionCall {
     pub name: Token,
-    pub args: Vec<Token>,
+    pub args: Vec<Vec<RpnExpr>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Ret {
-    pub return_token: Token,
+    pub expr: Vec<RpnExpr>,
+    pub func_name: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct InitFunc {
     pub args: Vec<Arg>,
     pub name: Token,
-    pub return_type: Token,
+    // type and pointer depth
+    pub return_type: (Token, u32),
     pub data: Vec<Expr>
 
 }
 #[derive(Debug, Clone)]
 pub struct Arg {
     pub arg_type: Token,
+    pub pointer_depth: u32,
     pub name: Token,
 }
 
@@ -183,6 +218,7 @@ impl Parser {
             m_tokens,
             m_index: 0,
             expressions: Vec::new(),
+            func_name: String::new(),
         }
     }
 
@@ -192,6 +228,54 @@ impl Parser {
             panic!("Trying to parse token more than token array has\nm_index: {}",self.m_tokens.len());
         }
         &self.m_tokens[pos]
+    }
+
+
+    fn parse_func(&mut self, var_token: Token, type_token: (Token, u32)) -> Option<Expr> {
+        self.consume();
+        let mut args: Vec<Arg> = Vec::new();
+        let mut pointer_depth = 0;
+        while self.peek(0).token != TokenType::CloseParen {
+            let arg_type = self.consume();
+            while self.peek(0).token == TokenType::Mul {
+                pointer_depth += 1;
+                self.consume();
+            }
+            let arg_name = self.consume();
+            if self.peek(0).token == TokenType::Coma {
+                self.consume();
+            }
+            let arg = Arg {
+                arg_type,
+                pointer_depth,
+                name: arg_name,
+            };
+            args.push(arg);
+        
+        }
+        self.consume();
+        let mut expr_arr: Vec<Expr> = Vec::new();
+        let mut depth = 0;
+        self.func_name = var_token.value.clone().unwrap();
+        while self.peek(0).token != TokenType::CloseScope || depth > 0 {
+            let expr: Expr = self.parse_expr().unwrap();
+            match &expr {
+                Expr::ForStmt(_) => depth += 1,
+                Expr::WhileStmt(_) => depth += 1,
+                Expr::CloseScope(_) => depth -=1,
+                _ => depth += 0,
+            }
+            expr_arr.push(expr);
+        }
+                
+        let init_func = InitFunc {
+            name: var_token,
+            return_type: type_token,
+            args,
+            data: expr_arr
+        };
+
+        return Some(Expr::InitFunc(init_func));
     }
     
 
@@ -209,8 +293,11 @@ impl Parser {
         let mut previous_token: Option<Token> = None;
         while !matches!(
             self.peek(0).token,
-            TokenType::Semi | TokenType::OpenScope
+            TokenType::Semi | TokenType::OpenScope | TokenType::Coma
         ) {
+            if self.peek(0).token == TokenType::CloseParen && self.peek(1).token == TokenType::Semi {
+                break;
+            }
             let token = self.consume();
             let token_copy = token.clone();
 
@@ -226,6 +313,7 @@ impl Parser {
                         output.push(func);
                     } else if self.peek(0).token == TokenType::OpenBracket {
                         self.consume();
+                        //redo this to take expr
                         let index = self.consume();
                         self.consume();
                         let get_array_value = GetArrayValue {
@@ -239,7 +327,14 @@ impl Parser {
                 }
 
 
-
+                TokenType::Address => {
+                        let var = self.consume();
+                        let res = GetAddr {
+                            var,
+                        };  
+                        output.push(RpnExpr::GetAddr(res));
+                        continue;
+                }
 
 
                 TokenType::OpenParen => {
@@ -259,12 +354,43 @@ impl Parser {
 
                 _ if Parser::is_operator(&token) => {
                     if previous_token.is_some() {
+
+                        if Parser::is_operator(&previous_token.clone().unwrap()) && token.token == TokenType::Mul {
+                            let mut stack_depth = 1;
+                            while self.peek(0).token == TokenType::Mul {
+                                stack_depth += 1;
+                                self.consume();
+                            }
+                            let var = self.consume();
+                            let res = Deref {
+                                var,
+                                stack_depth,
+                            };
+                            output.push(RpnExpr::Deref(res));
+                            continue;
+                        }
+
                         if Parser::is_operator(&previous_token.clone().unwrap()) && token.token == TokenType::Sub {
                             output.push(RpnExpr::Negative(Negative { data: self.consume() }));
                             continue;
                         }
                     }
                     else {
+                        if token.token == TokenType::Mul {
+                            let mut stack_depth = 1;
+                            while self.peek(0).token == TokenType::Mul {
+                                stack_depth += 1;
+                                self.consume();
+                            }
+                            let var = self.consume();
+                            let res = Deref {
+                                var,
+                                stack_depth,
+                            };
+                            output.push(RpnExpr::Deref(res));
+                            continue;
+                        }
+
                         if token.token == TokenType::Sub {
                             output.push(RpnExpr::Negative(Negative { data: self.consume() }));
                             continue;
@@ -295,6 +421,7 @@ impl Parser {
         while let Some(op) = op_stack.pop() {
             output.push(RpnExpr::Operator(Operator { data: op }));
         }
+
 
         output
     }
@@ -391,13 +518,13 @@ impl Parser {
             panic!("Expected '('");
         }
         self.consume();
-        let mut args: Vec<Token> = Vec::new();
+        let mut args: Vec<Vec<RpnExpr>> = Vec::new();
         while self.peek(0).token != TokenType::CloseParen {
-            let num = self.consume();
+            let expr = self.eval_expr();
             if self.peek(0).token == TokenType::Coma {
                 self.consume();
             }
-            args.push(num);
+            args.push(expr);
         }
         if self.peek(0).token != TokenType::CloseParen {
             panic!("Expected ')'");
@@ -414,6 +541,48 @@ impl Parser {
         if Parser::is_type(self.peek(0)) {
             let type_token = self.consume(); 
             let var_token  = self.consume();
+
+            // pointer
+            if var_token.token == TokenType::Mul {
+                let mut stack_depth: u32 = 1;
+                while self.peek(0).token == TokenType::Mul {
+                    stack_depth += 1;
+                    self.consume();
+                }
+                let var_name = self.consume();
+                if self.peek(0).token == TokenType::OpenParen {
+                    return self.parse_func(var_name, (type_token, stack_depth));
+                }
+
+                if self.peek(0).token == TokenType::Eq {
+                    let expr = self.eval_expr();
+                    if self.peek(0).token != TokenType::Semi {
+                        panic!("excpected semi colon");
+                    }
+                    self.consume();
+                    let res = CreatePointer {
+                        Type: type_token.token,
+                        Var: var_name.value.unwrap(),
+                        Expr: expr,
+                        pointer_depth: stack_depth,
+                    };
+                    return Some(Expr::CreatePointer(res))
+
+                } else if self.peek(0).token == TokenType::Semi {
+                    self.consume();
+                    let mut res: Vec<RpnExpr> = Vec::new();
+                    let expr = RpnExpr::PushNum(PushNum { data: Token { token: TokenType::Num, value: Some("0xDEADBEEFDEADBEEF".to_string()) } });
+                    res.push(expr);
+                    let some =  CreatePointer { 
+                        Type:TokenType::Num, 
+                        Var: var_name.value.unwrap(), 
+                        Expr: res,
+                        pointer_depth: stack_depth,
+                    };
+                    return Some(Expr::CreatePointer(some));
+
+                }
+            }
 
             //init array 
             if self.peek(0).token == TokenType::OpenBracket {
@@ -485,48 +654,39 @@ impl Parser {
             }
             // init function
             else if self.peek(0).token == TokenType::OpenParen {
-                self.consume();
-                let mut args: Vec<Arg> = Vec::new();
-                while self.peek(0).token != TokenType::CloseParen {
-                    let arg_type = self.consume();
-                    let arg_name = self.consume();
-                    if self.peek(0).token == TokenType::Coma {
-                        self.consume();
-                    }
-                    let arg = Arg {
-                        arg_type,
-                        name: arg_name,
-                    };
-                    args.push(arg);
-                
-                }
-                self.consume();
-                let mut expr_arr: Vec<Expr> = Vec::new();
-                let mut depth = 0;
-                while self.peek(0).token != TokenType::CloseScope || depth > 0 {
-                    let expr: Expr = self.parse_expr().unwrap();
-                    match &expr {
-                        Expr::ForStmt(_) => depth += 1,
-                        Expr::WhileStmt(_) => depth += 1,
-                        Expr::CloseScope(_) => depth -=1,
-                        _ => depth += 0,
-                    }
-                    expr_arr.push(expr);
-                }
-                
-
-                let init_func = InitFunc {
-                    name: var_token,
-                    return_type: type_token,
-                    args,
-                    data: expr_arr
-                };
-
-                return Some(Expr::InitFunc(init_func));
+                // the pointer depth will always be zero because if we had * in return type
+                // it would be in another section
+                return self.parse_func(var_token, (type_token, 0));
 
             }
         }
 
+        if self.peek(0).token == TokenType::Mul {
+            self.consume();
+            let mut pointer_depth: u32 = 1;
+            while self.peek(0).token == TokenType::Mul {
+                self.consume();
+                pointer_depth += 1;
+            }
+            let var = self.consume();
+            if self.peek(0).token == TokenType::Eq {
+                self.consume();
+                let expr = self.eval_expr();
+                if self.peek(0).token != TokenType::Semi {
+                    panic!("no semi colon");
+                }
+                self.consume();
+                let res = ChangePtrValue {
+                    Var: var.value.unwrap(),
+                    Expr: expr,
+                    pointer_depth,
+                };
+                return Some(Expr::ChangePtrValue(res));
+
+            } else {
+                panic!("strange syntax pointer");
+            }
+        }
 
         if self.peek(0).token == TokenType::OpenScope {
             self.consume();
@@ -552,6 +712,16 @@ impl Parser {
                     code: asm_code,
                 };
                 return Some(Expr::AsmCode(res))
+            }
+            if var.value.as_deref() == Some("sizeof") {
+                self.consume();
+                let var = self.consume();
+                self.consume();
+                if self.peek(0).token != TokenType::Semi {
+                        panic!("Expected semi colon");
+                    }
+                    self.consume();
+
             }
             // change array element
             if self.peek(0).token == TokenType::OpenBracket {
@@ -702,13 +872,14 @@ impl Parser {
         }
         if self.peek(0).token == TokenType::Return {
             self.consume();
-            let token = self.consume();
+            let expr = self.eval_expr();
             if self.peek(0).token != TokenType::Semi {
                 panic!("excpected ;");
             }
             self.consume();
             let return_ = Ret {
-                return_token: token,
+                expr: expr,
+                func_name: self.func_name.clone(),
             };
             return Some(Expr::Ret(return_));
         }

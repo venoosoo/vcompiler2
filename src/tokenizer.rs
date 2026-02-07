@@ -41,6 +41,7 @@ pub enum TokenType {
     OpenBracket,
     CloseBracket,
     Remainder,
+    Address,
     Semi,
 }
 #[derive(Clone, Debug)]
@@ -182,6 +183,7 @@ impl Tokenizer {
                                 self.push_token(TokenType::Sub, Some('-'.to_string()))
                             }
                         },
+                    '&' => self.push_token(TokenType::Address, None),
                     '*' => self.push_token(TokenType::Mul, Some('*'.to_string())),
                     '/' => self.push_token(TokenType::Div, Some('/'.to_string())),
                     '(' => self.push_token(TokenType::OpenParen, Some('('.to_string())),
