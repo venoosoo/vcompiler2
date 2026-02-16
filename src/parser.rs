@@ -1,4 +1,6 @@
 
+use std::collections::HashMap;
+
 use crate::tokenizer::Token;
 use crate::tokenizer::TokenType;
 
@@ -34,6 +36,20 @@ pub enum RpnExpr {
     GetArrayValue(GetArrayValue),
     Deref(Deref),
     GetAddr(GetAddr),
+    GetSizeOf(GetSizeOf),
+    GetStructValue(GetStructValue),
+}
+
+#[derive(Debug, Clone)]
+pub struct GetStructValue {
+    pub var_name: String,
+    pub struct_value_name: String,
+}
+
+
+#[derive(Debug, Clone)]
+pub struct GetSizeOf {
+    pub var: Token,
 }
 
 
@@ -96,7 +112,56 @@ pub enum Expr {
     ChangeArrElement(ChangeArrElement),
     CreatePointer(CreatePointer),
     ChangePtrValue(ChangePtrValue),
+    InitStruct(InitStruct),
+    CreateStruct(CreateStruct),
+    ChangeStructValue(ChangeStructValue),
+    ChangePtrStructValue(ChangePtrStructValue),
 }
+
+
+#[derive(Debug, Clone)]
+pub struct ChangePtrStructValue {
+    pub struct_name: String,
+    pub value_name: String,
+    pub expr: Vec<RpnExpr>,
+}
+
+
+
+#[derive(Debug, Clone)]
+pub struct ChangeStructValue {
+    pub struct_name: String,
+    pub value_name: String,
+    pub expr: Vec<RpnExpr>,
+}
+
+
+#[derive(Debug, Clone)]
+pub struct CreateStruct {
+    pub struct_name: String,
+    pub var_name: String,
+    pub pointer_depth: u32,
+    pub expr: Option<Vec<RpnExpr>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructArg {
+    pub arg_type: Token,
+    pub pointer_depth: u32,
+    pub name: Token,
+    pub pos: u32,
+}
+
+
+
+
+
+#[derive(Debug, Clone)]
+pub struct InitStruct {
+    pub name: String,
+    pub elements: HashMap<String, StructArg>,
+}
+
 
 #[derive(Debug, Clone)]
 pub struct ChangePtrValue {
@@ -159,6 +224,7 @@ pub struct InitFunc {
 #[derive(Debug, Clone)]
 pub struct Arg {
     pub arg_type: Token,
+    pub struct_name: Option<String>,
     pub pointer_depth: u32,
     pub name: Token,
 }
@@ -237,6 +303,13 @@ impl Parser {
         let mut pointer_depth = 0;
         while self.peek(0).token != TokenType::CloseParen {
             let arg_type = self.consume();
+            let mut struct_arg_name: Option<String> = None;
+
+            if arg_type.token == TokenType::Struct {
+                let struct_name = self.consume();
+                struct_arg_name = Some(struct_name.value.unwrap());
+            }
+            
             while self.peek(0).token == TokenType::Mul {
                 pointer_depth += 1;
                 self.consume();
@@ -246,6 +319,7 @@ impl Parser {
                 self.consume();
             }
             let arg = Arg {
+                struct_name: struct_arg_name,
                 arg_type,
                 pointer_depth,
                 name: arg_name,
@@ -267,7 +341,6 @@ impl Parser {
             }
             expr_arr.push(expr);
         }
-                
         let init_func = InitFunc {
             name: var_token,
             return_type: type_token,
@@ -307,7 +380,32 @@ impl Parser {
                 }
 
 
+
                 TokenType::Var => {
+
+                    if self.peek(0).token == TokenType::Dot {
+                        self.consume();
+                        let strcut_var = self.consume();
+                        let res = GetStructValue {
+                            var_name: token.value.unwrap(),
+                            struct_value_name: strcut_var.value.unwrap(),
+                        };
+                        output.push(RpnExpr::GetStructValue(res));
+                        continue;
+
+                    }
+
+                    if token.value.as_deref() == Some("sizeof") {
+                        self.consume();
+                        let var: Token = self.consume();
+                        self.consume();
+                        let res = GetSizeOf {
+                            var,
+                        };
+                        output.push(RpnExpr::GetSizeOf(res));
+                        continue;
+                    }
+
                     if self.peek(0).token == TokenType::OpenParen {
                         let func = self.parse_rpn_function(token);
                         output.push(func);
@@ -506,6 +604,7 @@ impl Parser {
             if let Some(expr) = self.parse_expr() {
                 self.expressions.push(expr);
             } else {
+                println!("tokens: {:?}",self.m_tokens);
                 panic!("Unexpected token: {:?} at {}", self.peek(0).token, self.m_index);
             }
         }
@@ -618,6 +717,8 @@ impl Parser {
                 return Some(Expr::InitArray(init_array));
             }
 
+            
+
             if self.peek(0).token == TokenType::Semi {
                 self.consume();
                 let some =  PushNum { data: Token { token: TokenType::Num, value: Some("0".to_string()) } };
@@ -700,6 +801,49 @@ impl Parser {
         }
         if self.peek(0).token == TokenType::Var {
             let var = self.consume();
+
+
+            if self.peek(0).token == TokenType::Access {
+                self.consume();
+                let struct_var = self.consume();
+                if self.peek(0).token == TokenType::Eq {
+                    self.consume();
+                    let expr = self.eval_expr();
+                    if self.peek(0).token != TokenType::Semi {
+                        panic!("excpected semi colon");
+                    }
+                    self.consume();
+                    let res = ChangePtrStructValue {
+                        struct_name: var.value.unwrap(),
+                        value_name: struct_var.value.unwrap(),
+                        expr,
+                    };
+                    return Some(Expr::ChangePtrStructValue(res))
+                }
+
+            }
+
+
+            if self.peek(0).token == TokenType::Dot {
+                self.consume();
+                let struct_var = self.consume();
+                if self.peek(0).token == TokenType::Eq {
+                    self.consume();
+                    let expr = self.eval_expr();
+                    if self.peek(0).token != TokenType::Semi {
+                        panic!("excpected semi colon");
+                    }
+                    self.consume();
+                    let res = ChangeStructValue {
+                        struct_name: var.value.unwrap(),
+                        value_name: struct_var.value.unwrap(),
+                        expr,
+                    };
+                    return Some(Expr::ChangeStructValue(res))
+                }
+            }
+
+
             if var.value.as_deref() == Some("asm") {
                 let mut asm_code: Vec<String> = Vec::new();
                 self.consume();
@@ -712,16 +856,6 @@ impl Parser {
                     code: asm_code,
                 };
                 return Some(Expr::AsmCode(res))
-            }
-            if var.value.as_deref() == Some("sizeof") {
-                self.consume();
-                let var = self.consume();
-                self.consume();
-                if self.peek(0).token != TokenType::Semi {
-                        panic!("Expected semi colon");
-                    }
-                    self.consume();
-
             }
             // change array element
             if self.peek(0).token == TokenType::OpenBracket {
@@ -870,6 +1004,86 @@ impl Parser {
             };
             return Some(Expr::ForStmt(for_var));
         }
+
+        if self.peek(0).token == TokenType::Struct {
+            self.consume();
+            let struct_name = self.consume();
+            if self.peek(0).token == TokenType::OpenScope {
+                //init of struct
+                self.consume();
+                let mut counter = 0;
+                let mut elements: HashMap<String, StructArg> = HashMap::new();
+                while self.peek(0).token != TokenType::CloseScope {
+                    let arg_type = self.consume();
+                    let mut pointer_depth = 0;
+                    if self.peek(0).token == TokenType::Mul {
+                        pointer_depth += 1;
+                        self.consume();
+                        while self.peek(0).token == TokenType::Mul {
+                            pointer_depth += 1;
+                            self.consume();
+                        }
+                    }
+
+                    let name = self.consume();
+                    if self.peek(0).token != TokenType::Semi {
+                        panic!("expceted semi colon");
+                    }
+                    self.consume();
+                    let res = StructArg {
+                        name: name.clone(),
+                        arg_type: arg_type,
+                        pointer_depth,
+                        pos: counter,
+                    };
+                    counter += 1;
+                    elements.insert(name.value.unwrap(), res);
+                }
+                self.consume(); // CloseScope
+                let res = InitStruct {
+                    name: struct_name.value.unwrap(),
+                    elements,
+                };
+                if self.peek(0).token != TokenType::Semi {
+                    panic!("excpected semi colon");
+                }
+                self.consume();
+                return Some(Expr::InitStruct(res));
+            }
+            else {
+                let mut pointer_depth = 0;
+                let mut expr: Option<Vec<RpnExpr>> = None;
+                while self.peek(0).token == TokenType::Mul {
+                    self.consume();
+                    pointer_depth += 1;
+                }
+                let var_name = self.consume();
+                if self.peek(0).token == TokenType::Eq {
+                    self.consume();
+                    if self.peek(0).token == TokenType::OpenScope {
+                        todo!()
+                    }
+                    else {
+                        expr = Some(self.eval_expr());
+                    }
+
+                }
+                let res = CreateStruct {
+                    var_name: var_name.value.unwrap(),
+                    struct_name: struct_name.value.unwrap(),
+                    pointer_depth,
+                    expr,
+                };
+                if self.peek(0).token != TokenType::Semi {
+                    panic!("nigga place that semi colon");
+                }
+                self.consume();
+                
+                return Some(Expr::CreateStruct(res))
+                
+            }
+        }
+
         if self.peek(0).token == TokenType::Return {
             self.consume();
             let expr = self.eval_expr();

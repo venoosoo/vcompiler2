@@ -1,7 +1,7 @@
 use core::panic;
 use std::{collections::HashMap, fmt::Write};
 
-use crate::parser::{ FunctionCall, Operator, PushNum, PushVar, Ret, RpnExpr};
+use crate::parser::{Operator, PushNum, PushVar, RpnExpr, StructArg};
 use crate::tokenizer::Token;
 use crate::{parser::Expr, tokenizer::TokenType, parser::Arg};
 #[derive(Debug)]
@@ -13,8 +13,10 @@ struct expr_stack {
 // ????????
 struct arr_data {
     size: u32,
-
-
+}
+#[derive(Debug)]
+struct struct_data {
+    struct_name: String,
 }
 #[derive(Debug)]
 struct var_data {
@@ -22,13 +24,22 @@ struct var_data {
     scope_depth: usize,
     var_type: TokenType,
     arr_data: Option<arr_data>,
+    struct_data: Option<struct_data>,
     pointer_depth: u32,
 }
+
+
 #[derive(Debug, Clone)]
 struct func_data {
     args: Vec<Arg>,
     // return type and pointer depth
     return_type: (Token, u32),
+}
+
+#[derive(Debug, Clone)]
+struct StructData {
+    elements: HashMap<String, StructArg>,
+    element_size: u32,
 }
 
 pub struct Gen {
@@ -38,6 +49,7 @@ pub struct Gen {
     depth_size: usize,
     scope_stack: Vec<i32>,
     m_stack_pos: u32,
+    structs: HashMap<String, StructData>,
     functions: HashMap<String, func_data>,
     current_func: String,
     id: usize,
@@ -57,6 +69,7 @@ impl Gen {
             depth_size: 0,
             scope_stack: Vec::new(),
             m_stack_pos: 0,
+            structs: HashMap::new(),
             functions: HashMap::new(),
             current_func: String::new(),
             id: 0,
@@ -84,7 +97,7 @@ impl Gen {
     }
 
     fn alloc(&mut self, ty: TokenType) -> u32 {
-        let size = self.get_size(ty);
+        let size: u32 = self.get_size(ty);
         self.m_stack_pos += size;
         self.m_stack_pos
     }
@@ -95,6 +108,13 @@ impl Gen {
             .iter()
             .map(|e| match e {
                 Expr::Var(v) => self.get_size(v.Type),
+
+                Expr::CreateStruct(v) => {
+                    let struct_data = self.structs.get(&v.struct_name).expect(&format!("no struct with name: {:?}",v.struct_name));
+                    let size = struct_data.elements.len() as u32 * struct_data.element_size;
+                    size
+                }
+
                 Expr::InitArray(v) => {
                     let arr_size: u32 = v.size.value.clone().unwrap().parse().unwrap();
                     self.get_size(v.arr_type.token) * arr_size
@@ -147,6 +167,7 @@ impl Gen {
             TokenType::ShortType => "ax".to_string(),
             TokenType::LongType => "rax".to_string(),
             TokenType::CharType => "al".to_string(),
+            TokenType::Struct => "rax".to_string(),
             _ => panic!("not a type: {:?}", token),
         }
     }
@@ -157,6 +178,7 @@ impl Gen {
             TokenType::ShortType => "si".to_string(),
             TokenType::LongType => "rsi".to_string(),
             TokenType::CharType => "sil".to_string(),
+            TokenType::Struct => "rsi".to_string(),
             _ => panic!("not a type: {:?}", token),
         }
     }
@@ -167,6 +189,7 @@ impl Gen {
             TokenType::ShortType => "bx".to_string(),
             TokenType::LongType => "rbx".to_string(),
             TokenType::CharType => "bl".to_string(),
+            TokenType::Struct => "rbx".to_string(),
             _ => panic!("not a type: {:?}", token),
         }
     }
@@ -255,6 +278,55 @@ impl Gen {
                         self.emit(format!(
                             "    mov QWORD [rbp-{}], {}",
                             slot, val
+                        ));
+                        stack.push(expr_stack { reg: format!("[rbp-{}]", slot), var_typd: (TokenType::Num, 0) })
+                    }
+                }
+
+                RpnExpr::GetStructValue(v) => {
+                    let var_data = self.m_vars.get(&v.var_name).expect(&format!("no var with name: {}",v.var_name));
+                    let stack_pos = var_data.stack_pos;
+                    if let Some(val) = var_data.struct_data.as_ref() {
+                        let struct_data = self.structs.get(&val.struct_name).expect(&format!("no struct with name: {:?}",val.struct_name));
+                        let element_size = struct_data.element_size;
+                        let res = struct_data.elements.get(&v.struct_value_name).expect(&format!("in var: {:?} there's no field: {:?}",v.var_name, v.struct_value_name));
+                                let value = stack_pos - (res.pos as i32 * element_size as i32);
+                                if stack.is_empty() {
+                                    self.emit(format!("    mov {} {}, [rbp - {}]",Gen::get_word(res.arg_type.token),Gen::get_rax_register(res.arg_type.token), value));
+                                    stack.push(expr_stack { reg: "rax".to_string(), var_typd: (TokenType::Num, 0) })
+                                } else if stack.len() == 1 {
+                                    self.emit(format!("    mov {} {}, [rbp - {}]",Gen::get_word(res.arg_type.token), Gen::get_rbx_register(res.arg_type.token) ,value));
+                                    stack.push(expr_stack { reg: "rbx".to_string(), var_typd: (TokenType::Num, 0) })
+                                } else {
+                                    let slot = Gen::calc_expr_stack_size(&stack) + 8;
+                                    self.emit(format!(
+                                        "    mov QWORD [rbp-{}], [rbp - {}]",
+                                        slot, value
+                                    ));
+                                    stack.push(expr_stack { reg: format!("[rbp-{}]", slot), var_typd: (TokenType::Num, 0) })
+                                }
+                            }
+                        
+                }
+
+                RpnExpr::GetSizeOf(v) => {
+                    let name = v.var.value.unwrap();
+                    let var_data = self.m_vars.get(&name).expect(&format!("no var with name: {}",name));
+                    let mut size = self.get_size(var_data.var_type);
+                    if var_data.pointer_depth > 0 {
+                        size = 8;
+                    }
+                    if stack.is_empty() {
+                        self.emit(format!("    mov eax, {}",size));
+                        stack.push(expr_stack { reg: "rax".to_string(), var_typd: (TokenType::Num, 0) })
+                    } else if stack.len() == 1 {
+                        self.emit(format!("    mov rbx, {}",size));
+                        stack.push(expr_stack { reg: "rbx".to_string(), var_typd: (TokenType::Num, 0) })
+                    } else {
+                        let slot = Gen::calc_expr_stack_size(&stack) + 8;
+                        self.emit(format!(
+                            "    mov QWORD [rbp-{}], {}",
+                            slot, size
                         ));
                         stack.push(expr_stack { reg: format!("[rbp-{}]", slot), var_typd: (TokenType::Num, 0) })
                     }
@@ -370,10 +442,9 @@ impl Gen {
                     let pos = var.stack_pos;
                     let var_type = var.var_type;
                     let pointer_depth = var.pointer_depth;
-
                     
                     if stack.is_empty() {
-                        let mut arg = Gen::get_rax_register(var.var_type);
+                        let mut arg = Gen::get_rax_register(var_type);
                         if var.pointer_depth != 0 {
                             arg = "rax".to_string();
                         }
@@ -386,7 +457,7 @@ impl Gen {
                             stack.push(expr_stack { reg: format!("{}",arg), var_typd: (TokenType::Num,0) });
                         }
                     } else if stack.len() == 1 {
-                        let mut arg = Gen::get_rbx_register(var.var_type);
+                        let mut arg = Gen::get_rbx_register(var_type);
                         if var.pointer_depth != 0 {
                             arg = "rbx".to_string();
                         }
@@ -504,6 +575,19 @@ impl Gen {
         }
     }
 
+    fn get_struct_element_size(&self, elements: &HashMap<String,StructArg>) -> u32 {
+        let mut largest_el_size = 0;
+        for (_name,i) in elements {
+            if i.pointer_depth > 0 {
+                largest_el_size = 8;
+            }
+            if self.get_size(i.arg_type.token) > largest_el_size {
+                largest_el_size = self.get_size(i.arg_type.token)
+            }
+        }
+        return largest_el_size
+    }
+
 
     fn parse_expr(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         for i in &self.m_ast {
@@ -515,6 +599,11 @@ impl Gen {
                         args: v.args.clone()
                     };
                     self.functions.insert(name, res);
+                }
+                Expr::InitStruct(v) => {
+                    let size = self.get_struct_element_size(&v.elements);
+                    self.structs.insert(v.name.clone(), StructData { elements: v.elements.clone(), element_size: size });
+
                 }
                 _ => continue,
             }
@@ -535,8 +624,8 @@ impl Gen {
                 0 => "edi".to_string(),
                 1 => "esi".to_string(),
                 2 => "edx".to_string(),
-                3 => "r10d".to_string(),  // r10 32-bit
-                4 => "r8d".to_string(),   // r8 32-bit
+                3 => "r10d".to_string(),
+                4 => "r8d".to_string(),
                 _ => panic!("arg_pos unknown arg: {}", pos),
             },
             TokenType::LongType => match pos {
@@ -571,6 +660,7 @@ impl Gen {
     fn get_type_of_expr(&self,expr: Vec<RpnExpr>) -> (TokenType, u32) {
         let mut res = TokenType::IntType; // default one
         let mut pointer_depth = 0;
+        let expr_len = expr.len();
         for i in expr { 
             match i {
 
@@ -578,17 +668,26 @@ impl Gen {
                     if v.data.token == TokenType::Var {
                         let name = v.data.value.unwrap();
                         let var = self.m_vars.get(&name).expect(&format!("no variable with name: {}",name));
-                        if self.get_size(res) < self.get_size(var.var_type) {
-                            res = v.data.token;
+
+
+                        if let Some(struct_data) = &var.struct_data {
+                            panic!("cannot copy a struct");
+                        }
+                        if self.get_size(res) < self.get_size(var.var_type) || expr_len < 2 {
+                            res = var.var_type;
                         }
                         if var.pointer_depth > pointer_depth {
                             pointer_depth = var.pointer_depth;
                         }
                     }
+
+
                     else if self.get_size(res) < self.get_size(v.data.token) {
                         res = v.data.token;
                     }
                 }
+
+
                 RpnExpr::GetAddr(v) => {
                     let name = v.var.value.unwrap();
                     let var_data = self.m_vars.get(&name).expect(&format!("no var with name: {}",name));
@@ -644,6 +743,7 @@ impl Gen {
                         var_type: v.Type, 
                         arr_data: None,
                         pointer_depth: expr_type.1,
+                        struct_data: None
                      
                     });
                 }
@@ -685,6 +785,7 @@ impl Gen {
                         var_type: v.Type,
                         arr_data: None,
                         pointer_depth: v.pointer_depth,
+                        struct_data: None
 
                     };
                     self.m_vars.insert(v.Var, var_data);
@@ -726,6 +827,7 @@ impl Gen {
                         var_type: v.arr_type.token,
                         arr_data: Some(arr_data),
                         pointer_depth: 1,
+                        struct_data: None
                     };
                     self.add_var(v.name.value.unwrap(), arr_var);
 
@@ -762,6 +864,9 @@ impl Gen {
                     self.emit(format!("end_if_{}:",id));
                     
                 }
+
+
+
                 Expr::WhileStmt(v) => {
                     let id = self.get_id();
                     self.emit(format!("while_{}:",id));
@@ -822,6 +927,86 @@ impl Gen {
                         panic!("trying to return with wrong type in: {}",v.func_name);
                     }
                 }
+                Expr::InitStruct(v) => {
+                    // we already added it earlier while checking for function init
+                    // so we just skipping this to not make a copy
+                }
+
+
+                Expr::ChangeStructValue(v) => {
+                    let expr_type = self.get_type_of_expr(v.expr.clone());
+                    let var_data = self.m_vars.get(&v.struct_name).expect(&format!("no var with name: {}",v.struct_name));
+                    if let Some(val) = var_data.struct_data.as_ref() {
+                        let struct_data = self.structs.get(&val.struct_name).expect(&format!("no struct with name: {:?}",v.struct_name));
+                        let field = struct_data.elements.get(&v.value_name).expect(&format!("in var: {:?} there's no field: {:?}",v.struct_name, v.value_name));
+                        if expr_type.0 == field.arg_type.token && expr_type.1 == field.pointer_depth {
+                            let stack_pos = var_data.stack_pos as u32 - (field.pos * struct_data.element_size);
+                            self.eval_expr(v.expr);
+                            self.emit(format!("    mov {} [rbp - {}], {}",Gen::get_word(expr_type.0),stack_pos, Gen::get_rax_register(expr_type.0)));
+                        }
+                        else {
+                            panic!("trying to assign var: {} in struct {} with wrong type",v.struct_name,v.value_name)
+                        }
+                        
+                    }
+                }
+                   
+
+                Expr::CreateStruct(v) => {
+                    if let Some(expr) = v.expr {
+                        let expr_type = self.get_type_of_expr(expr.clone());
+                        if expr_type.0 != TokenType::Struct {
+                            panic!("wrong type when trying to assing to struct")
+                        }
+                        if v.pointer_depth != expr_type.1 {
+                            panic!("wrong pointer depth when assing to struct")
+                        }
+                        self.eval_expr(expr);
+                        let pos = self.alloc(TokenType::LongType);
+                        self.emit(format!("    mov QWORD [rbp - {}], rax",pos));
+                    }
+                    if v.pointer_depth == 0 {
+                        let struct_data = self.structs.get(&v.struct_name).expect(&format!("no struct with name: {:?}",v.struct_name));
+                        self.m_stack_pos += struct_data.element_size * struct_data.elements.len() as u32;
+                    }
+                    let res = var_data {
+                        stack_pos: self.m_stack_pos as i32,
+                        scope_depth: self.depth_size,
+                        var_type: TokenType::Struct,
+                        arr_data: None,
+                        pointer_depth: v.pointer_depth,
+                        struct_data: Some(struct_data {struct_name: v.struct_name}),
+                    };
+                    self.m_vars.insert(v.var_name, res);
+
+
+                }
+
+                Expr::ChangePtrStructValue(v) => {
+                    let expr_type = self.get_type_of_expr(v.expr.clone());
+                    let var_data = self.m_vars.get(&v.struct_name).expect(&format!("no var with name: {}",v.struct_name));
+                    println!("m_vars: {:?}",self.m_vars);
+                    if let Some(val) = var_data.struct_data.as_ref() {
+                        let struct_pos = var_data.stack_pos;
+                        println!("struct_pos: {}",struct_pos);
+                        let struct_data = self.structs.get(&val.struct_name).expect(&format!("no struct with name: {:?}",v.struct_name));
+                        let element_size = struct_data.element_size;
+                        let field = struct_data.elements.get(&v.value_name).expect(&format!("in var: {:?} there's no field: {:?}",v.struct_name, v.value_name));
+                        let field_pos = field.pos;
+                        if expr_type.0 == field.arg_type.token && expr_type.1 == field.pointer_depth {
+                            self.emit(format!("    mov rsi, [rbp - {}]",struct_pos));
+                            self.emit(format!("    add rsi, {}",field_pos * element_size));
+                            self.eval_expr(v.expr);
+                            self.emit(format!("    mov [rsi], rax"));
+
+                        }
+                        else {
+                            panic!("trying to assign var: {} in struct {} with wrong type",v.struct_name,v.value_name)
+                        }
+                        
+                    }
+                }
+
                 Expr::InitFunc(v) => {
                     let name = v.name.value.clone().unwrap();
                     self.current_func = name.clone();
@@ -830,11 +1015,21 @@ impl Gen {
                     for arg in &v.args {
                         if arg.pointer_depth > 0 {
                             temp_stack_size += 8;
-                        } else {
-
+                            continue;
+                        }
+                        else if let Some(val) = &arg.struct_name {
+                            let struct_data = self.structs.get(val).expect(&format!("no struct with name: {}",val));
+                            let size = struct_data.elements.len() as u32 * struct_data.element_size;
+                            temp_stack_size += size;
+                            continue;
+                        
+                        } 
+                        else {
                             temp_stack_size += self.get_size(arg.arg_type.token);
                         }
                     }
+
+                    
                     let total = (temp_stack_size + 15) & !15;
                     self.emit("    push rbp".to_string());
                     self.emit("    mov rbp, rsp".to_string());
@@ -846,13 +1041,56 @@ impl Gen {
                         if arg.pointer_depth > 0 {
                             let pos = self.alloc(TokenType::LongType);
                             self.emit(format!("    mov [rbp - {}], {}",pos, Gen::arg_pos(index,TokenType::LongType)));
-                            let var_data = var_data { stack_pos: pos as i32, scope_depth: self.depth_size, var_type: arg.arg_type.token, arr_data:None, pointer_depth: arg.pointer_depth };
+                            let var_data = var_data { 
+                                stack_pos: pos as i32, 
+                                scope_depth: self.depth_size, 
+                                var_type: arg.arg_type.token, 
+                                arr_data:None, 
+                                pointer_depth: arg.pointer_depth,
+                                struct_data: {
+                                    if let Some(val) = arg.struct_name.clone() {
+                                        Some(struct_data {struct_name: val})
+                                    } else {
+                                        None
+                                    }
+                                },
+                                
+                            };
                             self.add_var(arg.name.value.clone().unwrap(), var_data);
+                            continue;
+                        } 
 
-                        } else {
-                            let pos = self.alloc(arg.arg_type.token);  
+                        if let Some(val) = &arg.struct_name {
+                            let struct_data = self.structs.get(val).expect(&format!("no struct with name: {}",val));
+                            let size = struct_data.elements.len() as u32 * struct_data.element_size;
+                            self.m_stack_pos += size;
+                            let pos = self.m_stack_pos;
+                            self.emit(format!("    mov [rbp - {}], {}",pos, Gen::arg_pos(index,TokenType::LongType)));
+                            let var_data = var_data { stack_pos: pos as i32, 
+                                scope_depth: self.depth_size, 
+                                var_type: arg.arg_type.token, 
+                                arr_data:None, 
+                                pointer_depth: 0,
+                                struct_data: None,
+                            
+                            };
+                            self.add_var(arg.name.value.clone().unwrap(), var_data);
+                            continue;
+
+                        }
+
+
+                        else {
+                            let pos = self.alloc(arg.arg_type.token); 
                             self.emit(format!("    mov [rbp - {}], {}",pos, Gen::arg_pos(index,arg.arg_type.token)));
-                            let var_data = var_data { stack_pos: pos as i32, scope_depth: self.depth_size, var_type: arg.arg_type.token, arr_data:None, pointer_depth: 0 };
+                            let var_data = var_data { stack_pos: pos as i32, 
+                                scope_depth: self.depth_size, 
+                                var_type: arg.arg_type.token, 
+                                arr_data:None, 
+                                pointer_depth: 0,
+                                struct_data: None,
+                                
+                            };
                             self.add_var(arg.name.value.clone().unwrap(), var_data);
                         }  
                         
@@ -869,7 +1107,6 @@ impl Gen {
                     self.m_stack_pos = self.scope_stack.pop().expect("unexcpected }") as u32;
                     self.current_func = "".to_string();
 
-            
                 }
                 Expr::ChangeArrElement(v) => {
                     self.eval_expr(v.expr);
@@ -915,12 +1152,12 @@ impl Gen {
 
                 }
                 Expr::FunctionCall(v) => {
+
                     let name = v.name.value.clone().unwrap();
                     let func_data = self
                         .functions
                         .get(&name)
                         .cloned();
-                    
                     if func_data.is_some() {
                         let func_data = func_data.unwrap();
                         for (index, v) in v.args.iter().enumerate() {
@@ -931,6 +1168,7 @@ impl Gen {
                             self.eval_expr(v.to_vec());
                             self.emit(format!("    mov {}, {}",Gen::arg_pos(index, expr_type.0), Gen::get_rax_register(expr_type.0)));
                         }
+
                         for (index, arg_data) in func_data.args.iter().enumerate() {
                             let expr = self.get_type_of_expr(v.args[index].clone());
                             if expr.0 != arg_data.arg_type.token
@@ -971,7 +1209,7 @@ impl Gen {
                         self.emit(format!("    {}",buf));
                     }
                 }
-                _ => panic!("trying to gen unkown expr")
+                _ => panic!("trying to gen unkown expr: {:?}",expr)
             }
         }
     }

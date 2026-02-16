@@ -38,10 +38,13 @@ pub enum TokenType {
     Return,
     Coma,
     String,
+    Struct,
     OpenBracket,
+    Dot,
     CloseBracket,
     Remainder,
     Address,
+    Access,
     Semi,
 }
 #[derive(Clone, Debug)]
@@ -129,6 +132,7 @@ impl Tokenizer {
                     "for" => self.push_token(TokenType::For, None),
                     "void" => self.push_token(TokenType::Void, None),
                     "return" => self.push_token(TokenType::Return, None),
+                    "struct" => self.push_token(TokenType::Struct, None),
                     // we think its variable
                     _ => self.push_token(TokenType::Var, Some(self.m_buf.clone())),
                     }
@@ -158,6 +162,9 @@ impl Tokenizer {
                         }
                         self.consume();
                     } 
+                    '.' => {
+                        self.push_token(TokenType::Dot, None);
+                    }
                     '=' => {
                         if self.peek(0) == '=' {
                             self.push_token(TokenType::AsertEq, None);
@@ -176,6 +183,11 @@ impl Tokenizer {
                             }
                         },
                     '-' => {
+                            if self.peek(0) == '>' {
+                                self.consume();
+                                self.push_token(TokenType::Access, None);
+                                continue;
+                            }
                             if self.peek(0) == '-' {
                                 self.push_token(TokenType::Dec, Some("--".to_string()));
                                 self.consume();
