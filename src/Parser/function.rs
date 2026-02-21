@@ -1,7 +1,7 @@
 
 
 use super::*;
-use crate::Ir::stmt::{Arg, FunctionCall, InitFunc};
+use crate::Ir::stmt::{Arg, FunctionCall, InitFunc, TypeInfo};
 
 use crate::Ir::expr::Function;
 
@@ -54,7 +54,7 @@ impl Parser {
         };
         func_call
     }
-    pub fn parse_func(&mut self, var_token: Token, type_token: (Token, u32)) -> Option<Stmt> {
+    pub fn parse_func(&mut self, var_token: Token, type_token: TypeInfo) -> Option<Stmt> {
         self.consume();
         let mut args: Vec<Arg> = Vec::new();
         let mut pointer_depth = 0;

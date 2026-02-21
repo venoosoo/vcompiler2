@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let res = parser.parse();
     
     // to lazy to make normal debug print
-    //println!("parse result\n{:#?}",res);
+    println!("parse result\n{:#?}",res);
 
     let mut generator = Gen::Gen::new(res);
     let asm = generator.gen_asm()?;

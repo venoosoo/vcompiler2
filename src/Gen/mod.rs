@@ -1,15 +1,19 @@
 use core::panic;
+use std::rc::Rc;
 use std::{collections::HashMap, fmt::Write};
 
 use crate::Ir::expr::RpnExpr;
 use crate::Ir::Stmt;
 use crate::Ir::r#gen::*;
 use crate::Ir::stmt::StructArg;
+use crate::Ir::stmt::TypeInfo;
 use crate::Tokenizer::TokenType;
 
 
 mod gen_expr;
 mod gen_stmt;
+mod expr;
+mod stmt;
 
 pub struct Gen {
     m_ast: Vec<Stmt>,
@@ -76,7 +80,7 @@ impl Gen {
         let total: u32 = exprs
             .iter()
             .map(|e| match e {
-                Stmt::Var(v) => self.get_size(v.Type),
+                Stmt::CreateVar(v) => self.get_size(v.Type),
 
                 Stmt::CreateStruct(v) => {
                     let struct_data = self.structs.get(&v.struct_name).expect(&format!("no struct with name: {:?}",v.struct_name));
@@ -129,6 +133,18 @@ impl Gen {
             _ => false,
         }
     } 
+
+
+    fn get_rdx_register(token: TokenType) -> String {
+        match token {
+            TokenType::IntType => "edx".to_string(),
+            TokenType::ShortType => "dx".to_string(),
+            TokenType::LongType => "rdx".to_string(),
+            TokenType::CharType => "dl".to_string(),
+            TokenType::Struct => "rdx".to_string(),
+            _ => panic!("not a type: {:?}", token),
+        }
+    }
 
     fn get_rax_register(token: TokenType) -> String {
         match token {
@@ -244,7 +260,7 @@ impl Gen {
 
 
     fn gen_stmts(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        for i in &self.m_ast {
+        for i in self.m_ast.iter() {
             match i {
                 Stmt::InitFunc(v) => {
                     let name = v.name.value.clone().unwrap();
@@ -262,11 +278,10 @@ impl Gen {
                 _ => continue,
             }
         }
-
-        for i in 0..self.m_ast.len() {
-            let expr = self.m_ast[i].clone();
-            self.parse_stmt(expr);
-
+        
+        let mut ast = std::mem::take(&mut self.m_ast);
+        for i in ast.iter_mut() {
+            self.parse_stmt(i);
         }
         Ok(())
     }
@@ -311,7 +326,7 @@ impl Gen {
     }
 
 
-    fn get_type_of_expr(&self,expr: Vec<RpnExpr>) -> (TokenType, u32) {
+    fn get_type_of_expr(&self,expr: &Vec<RpnExpr>) -> TypeInfo {
         let mut res = TokenType::IntType; // default one
         let mut pointer_depth = 0;
         let expr_len = expr.len();
@@ -320,13 +335,13 @@ impl Gen {
 
                 RpnExpr::PushVar(v) => {
                     if v.data.token == TokenType::Var {
-                        let name = v.data.value.unwrap();
-                        let var = self.m_vars.get(&name).expect(&format!("no variable with name: {}",name));
+                        let name = v.data.value.as_ref().unwrap();
+                        let var = self.m_vars.get(name).expect(&format!("no variable with name: {}",name));
 
-
-                        if let Some(struct_data) = &var.struct_data {
+                        if var.struct_data.is_some() {
                             panic!("cannot copy a struct");
                         }
+                        
                         if self.get_size(res) < self.get_size(var.var_type) || expr_len < 2 {
                             res = var.var_type;
                         }
@@ -340,18 +355,16 @@ impl Gen {
                         res = v.data.token;
                     }
                 }
-
-
                 RpnExpr::GetAddr(v) => {
-                    let name = v.var.value.unwrap();
-                    let var_data = self.m_vars.get(&name).expect(&format!("no var with name: {}",name));
+                    let name = v.var.value.as_ref().unwrap();
+                    let var_data = self.m_vars.get(name).expect(&format!("no var with name: {}",name));
                     res = var_data.var_type;
                     pointer_depth = var_data.pointer_depth + 1;
                 }
 
                 RpnExpr::Deref(v) => {
-                    let name = v.var.value.unwrap();
-                    let var_data = self.m_vars.get(&name).expect(&format!("no var with name: {}",name));
+                    let name = v.var.value.as_ref().unwrap();
+                    let var_data = self.m_vars.get(name).expect(&format!("no var with name: {}",name));
                     res = var_data.var_type;
                     pointer_depth = var_data.pointer_depth - v.stack_depth;
                 }
@@ -359,7 +372,7 @@ impl Gen {
                 _ => continue,
             }
         }
-        (res, pointer_depth)
+        TypeInfo { var_type: res, pointer_depth, }
     }
 
 

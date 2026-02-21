@@ -1,12 +1,20 @@
 use std::collections::HashMap;
 
 use crate::Tokenizer::{Token, TokenType};
-use crate::Ir::stmt::{Arg, StructArg};
+use crate::Ir::stmt::{Arg, StructArg, TypeInfo};
+
+
+#[derive(Debug)]
+pub struct ExprStackHelper {
+    pub stack: Vec<ExprStack>,
+
+}
 
 #[derive(Debug)]
 pub(crate) struct ExprStack {
     pub(crate) reg: String,
-    pub(crate) var_typd: (TokenType, u32),
+    pub(crate) var_type: TokenType,
+    pub(crate) pointer_depth: u32,
 }
 #[derive(Debug)]
 // ????????
@@ -32,7 +40,7 @@ pub(crate) struct VarData {
 pub(crate) struct FuncData {
     pub(crate) args: Vec<Arg>,
     // return type and pointer depth
-    pub(crate) return_type: (Token, u32),
+    pub(crate) return_type: TypeInfo,
 }
 
 #[derive(Debug, Clone)]

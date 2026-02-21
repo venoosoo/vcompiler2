@@ -20,7 +20,7 @@ impl Parser {
                 }
                 let var_name = self.consume();
                 if self.peek(0).token == TokenType::OpenParen {
-                    return self.parse_func(var_name, (type_token, stack_depth));
+                    return self.parse_func(var_name, TypeInfo { var_type: type_token.token, pointer_depth: stack_depth });
                 }
 
                 if self.peek(0).token == TokenType::Eq {
@@ -102,7 +102,7 @@ impl Parser {
                     stmt: res,
                 };
                 
-                return Some(Stmt::Var(new_var));
+                return Some(Stmt::CreateVar(new_var));
             }
             // create var
             if self.peek(0).token == TokenType::Eq {
@@ -121,13 +121,13 @@ impl Parser {
                     stmt: res,
                 };
                 
-                return Some(Stmt::Var(new_var));
+                return Some(Stmt::CreateVar(new_var));
             }
             // init function
             else if self.peek(0).token == TokenType::OpenParen {
                 // the pointer depth will always be zero because if we had * in return type
                 // it would be in another section
-                return self.parse_func(var_token, (type_token, 0));
+                return self.parse_func(var_token, TypeInfo { var_type: type_token.token, pointer_depth: 0 });
 
             }
         }

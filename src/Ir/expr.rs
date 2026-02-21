@@ -2,7 +2,7 @@ use crate::Tokenizer::Token;
 
 
 #[derive(Debug, Clone)]
-pub enum RpnExpr {
+pub(crate) enum RpnExpr {
     PushNum(PushNum),
     PushVar(PushVar),
     Operator(Operator),
@@ -17,53 +17,53 @@ pub enum RpnExpr {
 
 
 #[derive(Debug, Clone)]
-pub struct GetStructValue {
-    pub var_name: String,
-    pub struct_value_name: String,
+pub(crate) struct GetStructValue {
+    pub(crate) var_name: String,
+    pub(crate) struct_value_name: String,
 }
 
 
 #[derive(Debug, Clone)]
-pub struct GetSizeOf {
-    pub var: Token,
+pub(crate) struct GetSizeOf {
+    pub(crate) var: Token,
 }
 
 
 #[derive(Debug, Clone)]
-pub struct GetAddr {
-    pub var: Token,
+pub(crate) struct GetAddr {
+    pub(crate) var: Token,
 }
 
 #[derive(Debug, Clone)]
-pub struct Deref {
-    pub var: Token,
-    pub stack_depth: u32,
+pub(crate) struct Deref {
+    pub(crate) var: Token,
+    pub(crate) stack_depth: u32,
 }
 
 #[derive(Debug, Clone)]
-pub struct GetArrayValue {
-    pub name: Token,
-    pub index: Token,
+pub(crate) struct GetArrayValue {
+    pub(crate) name: Token,
+    pub(crate) index: Token,
 }
 
 #[derive(Debug, Clone)]
-pub struct Negative {
-    pub data: Token,
+pub(crate) struct Negative {
+    pub(crate) data: Token,
 }
 #[derive(Debug, Clone)]
-pub struct PushNum {
-    pub data: Token,
+pub(crate) struct PushNum {
+    pub(crate) data: Token,
 }
 #[derive(Debug, Clone)]
-pub struct PushVar {
-    pub data: Token,
+pub(crate) struct PushVar {
+    pub(crate) data: Token,
 }
 #[derive(Debug, Clone)]
-pub struct Operator {
-    pub data: Token,
+pub(crate) struct Operator {
+    pub(crate) data: Token,
 }
 #[derive(Debug, Clone)]
-pub struct Function {
-    pub name: Token,
-    pub args: Vec<Token>,
+pub(crate) struct Function {
+    pub(crate) name: Token,
+    pub(crate) args: Vec<Token>,
 }

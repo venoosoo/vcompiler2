@@ -5,7 +5,7 @@ use crate::Ir::expr::RpnExpr;
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    Var(CreateVar),
+    CreateVar(CreateVar),
     OpenScope(OpenScope),
     CloseScope(CloseScope),
     ChangeVar(ChangeVar),
@@ -31,159 +31,165 @@ pub enum Stmt {
 
 
 #[derive(Debug, Clone)]
-pub struct ChangePtrStructValue {
-    pub struct_name: String,
-    pub value_name: String,
-    pub expr: Vec<RpnExpr>,
+pub(crate) struct ChangePtrStructValue {
+    pub(crate) struct_name: String,
+    pub(crate) value_name: String,
+    pub(crate) expr: Vec<RpnExpr>,
 }
 
 
 
 #[derive(Debug, Clone)]
-pub struct ChangeStructValue {
-    pub struct_name: String,
-    pub value_name: String,
-    pub expr: Vec<RpnExpr>,
+pub(crate) struct ChangeStructValue {
+    pub(crate) struct_name: String,
+    pub(crate) value_name: String,
+    pub(crate) expr: Vec<RpnExpr>,
 }
 
 
 #[derive(Debug, Clone)]
-pub struct CreateStruct {
-    pub struct_name: String,
-    pub var_name: String,
-    pub pointer_depth: u32,
-    pub expr: Option<Vec<RpnExpr>>,
+pub(crate) struct CreateStruct {
+    pub(crate) struct_name: String,
+    pub(crate) var_name: String,
+    pub(crate) pointer_depth: u32,
+    pub(crate) expr: Option<Vec<RpnExpr>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct StructArg {
-    pub arg_type: Token,
-    pub pointer_depth: u32,
-    pub name: Token,
-    pub pos: u32,
-}
-
-
-
-
-
-#[derive(Debug, Clone)]
-pub struct InitStruct {
-    pub name: String,
-    pub elements: HashMap<String, StructArg>,
-}
-
-
-#[derive(Debug, Clone)]
-pub struct ChangePtrValue {
-    pub var: String,
-    pub stmt: Vec<RpnExpr>,
-    pub pointer_depth: u32
-}
-
-#[derive(Debug, Clone)]
-pub struct CreatePointer {
-    pub type_: TokenType,
-    pub var: String,
-    pub stmt: Vec<RpnExpr>,
-    pub pointer_depth: u32
-}
-
-#[derive(Debug, Clone)]
-pub struct ChangeArrElement {
-    pub arr_name: Token,
-    pub element: Token,
-    pub expr: Vec<RpnExpr>,
-}
-
-#[derive(Debug, Clone)]
-pub struct InitArray {
-    pub name: Token,
-    pub arr_type: Token,
-    pub size: Token,
-    pub data: Vec<Token>,
+pub(crate) struct StructArg {
+    pub(crate) arg_type: Token,
+    pub(crate) pointer_depth: u32,
+    pub(crate) name: Token,
+    pub(crate) pos: u32,
 }
 
 
 
+
+
 #[derive(Debug, Clone)]
-pub struct AsmCode {
-    pub code: Vec<String>,
+pub(crate) struct InitStruct {
+    pub(crate) name: String,
+    pub(crate) elements: HashMap<String, StructArg>,
+}
+
+
+#[derive(Debug, Clone)]
+pub(crate) struct ChangePtrValue {
+    pub(crate) var: String,
+    pub(crate) stmt: Vec<RpnExpr>,
+    pub(crate) pointer_depth: u32
 }
 
 #[derive(Debug, Clone)]
-pub struct FunctionCall {
-    pub name: Token,
-    pub args: Vec<Vec<RpnExpr>>,
+pub(crate) struct CreatePointer {
+    pub(crate) type_: TokenType,
+    pub(crate) var: String,
+    pub(crate) stmt: Vec<RpnExpr>,
+    pub(crate) pointer_depth: u32
 }
 
 #[derive(Debug, Clone)]
-pub struct Ret {
-    pub expr: Vec<RpnExpr>,
-    pub func_name: String,
+pub(crate) struct ChangeArrElement {
+    pub(crate) arr_name: Token,
+    pub(crate) element: Token,
+    pub(crate) expr: Vec<RpnExpr>,
 }
 
 #[derive(Debug, Clone)]
-pub struct InitFunc {
-    pub args: Vec<Arg>,
-    pub name: Token,
+pub(crate) struct InitArray {
+    pub(crate) name: Token,
+    pub(crate) arr_type: Token,
+    pub(crate) size: Token,
+    pub(crate) data: Vec<Token>,
+}
+
+
+
+#[derive(Debug, Clone)]
+pub(crate) struct AsmCode {
+    pub(crate) code: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FunctionCall {
+    pub(crate) name: Token,
+    pub(crate) args: Vec<Vec<RpnExpr>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Ret {
+    pub(crate) expr: Vec<RpnExpr>,
+    pub(crate) func_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TypeInfo {
+    pub(crate) var_type: TokenType,
+    pub(crate) pointer_depth: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct InitFunc {
+    pub(crate) args: Vec<Arg>,
+    pub(crate) name: Token,
     // type and pointer depth
-    pub return_type: (Token, u32),
-    pub data: Vec<Stmt>
+    pub(crate) return_type: TypeInfo,
+    pub(crate) data: Vec<Stmt>
 
 }
 #[derive(Debug, Clone)]
-pub struct Arg {
-    pub arg_type: Token,
-    pub struct_name: Option<String>,
-    pub pointer_depth: u32,
-    pub name: Token,
+pub(crate) struct Arg {
+    pub(crate) arg_type: Token,
+    pub(crate) struct_name: Option<String>,
+    pub(crate) pointer_depth: u32,
+    pub(crate) name: Token,
 }
 
 #[derive(Debug, Clone)]
-pub struct IncVar {
-    pub var: Token,
+pub(crate) struct IncVar {
+    pub(crate) var: Token,
 }
 
 #[derive(Debug, Clone)]
-pub struct DecVar {
-    pub var: Token,
+pub(crate) struct DecVar {
+    pub(crate) var: Token,
 }
 
 #[derive(Debug, Clone)]
-pub struct WhileStmt {
-    pub expr: Vec<RpnExpr>,
-    pub data: Vec<Stmt>,
+pub(crate) struct WhileStmt {
+    pub(crate) expr: Vec<RpnExpr>,
+    pub(crate) data: Vec<Stmt>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ForStmt {
-    pub expr1: Box<Stmt>,
-    pub expr2: Vec<RpnExpr>,
-    pub expr3: Box<Stmt>,
-    pub data: Vec<Stmt>,
+pub(crate) struct ForStmt {
+    pub(crate) expr1: Box<Stmt>,
+    pub(crate) expr2: Vec<RpnExpr>,
+    pub(crate) expr3: Box<Stmt>,
+    pub(crate) data: Vec<Stmt>,
 }
 
 
 #[derive(Debug, Clone)]
-pub struct IfStmt {
-    pub expr: Vec<RpnExpr>,
-    pub data: Vec<Stmt>,
-    pub else_data: Vec<Stmt>
+pub(crate) struct IfStmt {
+    pub(crate) expr: Vec<RpnExpr>,
+    pub(crate) data: Vec<Stmt>,
+    pub(crate) else_data: Vec<Stmt>
 }
 #[derive(Debug, Clone)]
-pub struct CreateVar {
-    pub Type: TokenType,
-    pub var: String,
-    pub stmt: Vec<RpnExpr>,
+pub(crate) struct CreateVar {
+    pub(crate) Type: TokenType,
+    pub(crate) var: String,
+    pub(crate) stmt: Vec<RpnExpr>,
 }
 #[derive(Debug, Clone)]
-pub struct ChangeVar {
-    pub var: String,
-    pub stmt: Vec<RpnExpr>,
+pub(crate) struct ChangeVar {
+    pub(crate) var: String,
+    pub(crate) stmt: Vec<RpnExpr>,
 }
 
 #[derive(Debug, Clone)]
-pub struct OpenScope;
+pub(crate) struct OpenScope;
 #[derive(Debug, Clone)]
-pub struct CloseScope;
+pub(crate) struct CloseScope;
